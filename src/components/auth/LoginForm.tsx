@@ -10,7 +10,10 @@ import type { User } from '@/types/api';
 interface LoginFormProps {
   onSuccess: () => void;
 }
-
+// Add type guard for Error
+function isError(error: unknown): error is Error {
+    return error instanceof Error;
+  }
 export function LoginForm({ onSuccess }: LoginFormProps) {
   const [credentials, setCredentials] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
@@ -27,7 +30,7 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
       Logger.info('Login successful', { userId: user.id });
       onSuccess();
     } catch (err) {
-      Logger.error('Login failed', err);
+      Logger.error('Login failed', isError(err) ? err : new Error(String(err)));
       setError('Invalid API credentials. Please try again.');
     } finally {
       setLoading(false);

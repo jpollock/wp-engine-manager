@@ -1,7 +1,9 @@
+// src/lib/logger.ts
 type LogLevel = 'info' | 'warn' | 'error';
+type LogArgs = string | number | boolean | null | undefined | object | Error;
 
 export class Logger {
-  static log(level: LogLevel, message: string, ...args: any[]) {
+  static log(level: LogLevel, message: string, ...args: LogArgs[]) {
     const timestamp = new Date().toISOString();
     const logMessage = `[${timestamp}] [${level.toUpperCase()}] ${message}`;
     
@@ -18,15 +20,15 @@ export class Logger {
     }
   }
 
-  static info(message: string, ...args: any[]) {
+  static info(message: string, ...args: LogArgs[]) {
     this.log('info', message, ...args);
   }
 
-  static warn(message: string, ...args: any[]) {
+  static warn(message: string, ...args: LogArgs[]) {
     this.log('warn', message, ...args);
   }
 
-  static error(message: string, ...args: any[]) {
+  static error(message: string, ...args: LogArgs[]) {
     this.log('error', message, ...args);
   }
 }

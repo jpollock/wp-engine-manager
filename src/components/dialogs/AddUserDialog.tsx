@@ -13,6 +13,11 @@ interface AddUserDialogProps {
   onSuccess: () => void;
 }
 
+// Add type guard for Error
+function isError(error: unknown): error is Error {
+    return error instanceof Error;
+  }
+
 export function AddUserDialog({ open, onClose, selectedAccounts, onSuccess }: AddUserDialogProps) {
   const { request, loading } = useApi();
   const [userData, setUserData] = useState({
@@ -40,7 +45,7 @@ export function AddUserDialog({ open, onClose, selectedAccounts, onSuccess }: Ad
       onSuccess();
       onClose();
     } catch (error) {
-      Logger.error('Failed to create user', error);
+      Logger.error('Failed to create user', isError(error) ? error : new Error(String(error)));
     }
   };
 

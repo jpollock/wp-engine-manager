@@ -1,5 +1,10 @@
 import { Logger } from './logger';
 
+function isError(error: unknown): error is Error {
+    return error instanceof Error;
+  }
+
+
 export class APIError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -48,7 +53,7 @@ export const api = {
       Logger.info(`API Response: ${options.method || 'GET'} ${endpoint} - Success`);
       return data as T;
     } catch (error) {
-      Logger.error(`API Error: ${options.method || 'GET'} ${endpoint}`, error);
+      Logger.error(`API Error: ${options.method || 'GET'} ${endpoint}`, isError(error) ? error : new Error(String(error)));
       throw error;
     }
   }

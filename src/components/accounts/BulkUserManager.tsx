@@ -1,5 +1,5 @@
 // src/components/accounts/BulkUserManager.tsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,7 +12,7 @@ import { Progress } from '@/components/ui/progress';
 import { X } from 'lucide-react';
 import { useApi } from '@/lib/hooks/useApi';
 import { Logger } from '@/lib/logger';
-import type { Account, AccountUser } from '@/types/api';
+import type { Account, AccountUser, PaginatedResponse } from '@/types/api';
 
 interface BulkUserManagerProps {
   open: boolean;
@@ -40,6 +40,16 @@ interface NewUser {
   first_name: string;
   last_name: string;
   email: string;
+  roles?: string;
+}
+
+interface AccountUserWithAccountName extends AccountUser {
+  accountName: string;
+}
+
+interface PendingAssignment {
+  accountId: string | null;
+  role: string | null;
 }
 
 interface ActionResult {
@@ -51,19 +61,27 @@ interface ActionResult {
   error?: string;
 }
 
-interface PendingAssignment {
-    accountId: string | null;
-    role: string | null;
+interface AccountsResponse {
+  results: Account[];
+  count: number;
+  next?: string;
+  previous?: string;
+}
+
+// Add a type guard for Error
+function isError(error: unknown): error is Error {
+    return error instanceof Error;
   }
 
-  
 export function BulkUserManager({ open, onClose }: BulkUserManagerProps) {
-  const { request } = useApi();
+  const { request } = useApi<AccountsResponse>();
+  const { request: usersRequest } = useApi<PaginatedResponse<AccountUser>>();
   const [step, setStep] = useState(1);
   const [action, setAction] = useState<UserAction>('add');
-  const [existingUsers, setExistingUsers] = useState<AccountUser[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [existingUsers, setExistingUsers] = useState<AccountUserWithAccountName[]>([]);
   const [selectedUsers, setSelectedUsers] = useState<UserActionItem[]>([]);
+  const [pendingAssignments, setPendingAssignments] = useState<Record<number, PendingAssignment>>({});
   const [newUser, setNewUser] = useState<NewUser>({
     first_name: '',
     last_name: '',
@@ -73,28 +91,22 @@ export function BulkUserManager({ open, onClose }: BulkUserManagerProps) {
   const [results, setResults] = useState<ActionResult[]>([]);
   const [progress, setProgress] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
-  // Inside the BulkUserManager component, add this state
-  const [pendingAssignments, setPendingAssignments] = useState<Record<number, PendingAssignment>>({});
 
-  useEffect(() => {
-    if (open) {
-      loadInitialData();
-    }
-  }, [open]);
-
-  const loadInitialData = async () => {
+  const loadInitialData = useCallback(async () => {
     try {
-      // Load all accounts for assignment
-      const accountsResponse = await request<{results: Account[]}>('/accounts');
+      const accountsResponse = await request('/accounts');
       setAccounts(accountsResponse.results);
 
-      // Load all users
       const allUsersPromises = accountsResponse.results.map(account =>
-        request<{results: AccountUser[]}>(`/accounts/${account.id}/account_users`)
+        usersRequest(`/accounts/${account.id}/account_users`)
           .then(response => response.results.map(user => ({
             ...user,
             accountName: account.name
-          })))
+          } as AccountUserWithAccountName)))
+          .catch(error => {
+            Logger.error(`Failed to fetch users for account ${account.id}`, isError(error) ? error : new Error(String(error)));
+            return [] as AccountUserWithAccountName[];
+          })
       );
 
       const usersFromAllAccounts = await Promise.all(allUsersPromises);
@@ -106,78 +118,24 @@ export function BulkUserManager({ open, onClose }: BulkUserManagerProps) {
       
       setExistingUsers(uniqueUsers);
     } catch (error) {
-      Logger.error('Failed to load initial data', error);
+      Logger.error('Failed to load initial data', isError(error) ? error : new Error(String(error)));
     }
-  };
+  }, [request, usersRequest]);
 
-// Add these handlers
-const handlePendingAccountChange = (userIndex: number, accountId: string) => {
-    setPendingAssignments(current => ({
-      ...current,
-      [userIndex]: {
-        ...current[userIndex],
-        accountId
-      }
-    }));
-  };
-  
-  const handlePendingRoleChange = (userIndex: number, role: string) => {
-    setPendingAssignments(current => ({
-      ...current,
-      [userIndex]: {
-        ...current[userIndex],
-        role
-      }
-    }));
-  };
-  
-// Inside BulkUserManager component
+  useEffect(() => {
+    if (open) {
+      loadInitialData();
+      setStep(1);
+      setAction('add');
+      setSelectedUsers([]);
+      setResults([]);
+      setProgress(0);
+      setProcessing(false);
+      setSearchTerm('');
+      setPendingAssignments({});
+    }
+  }, [open, loadInitialData]);
 
-const handleAddAssignment = (userIndex: number) => {
-    const pending = pendingAssignments[userIndex];
-    // Early returns for invalid data
-    if (!pending?.accountId || !pending?.role) return;
-  
-    const account = accounts.find(a => a.id === pending.accountId);
-    if (!account) return;
-  
-    // Update selectedUsers
-    setSelectedUsers(prevUsers => {
-      const updatedUsers = [...prevUsers];
-      const user = { ...updatedUsers[userIndex] };
-      const assignments = user.accountAssignments || [];
-  
-      // Check for existing assignment
-      const existingIndex = assignments.findIndex(a => a.accountId === pending.accountId);
-      if (existingIndex >= 0) {
-        console.log('Assignment already exists'); // Debug log
-        return prevUsers; // Return original array if assignment exists
-      }
-  
-      // Add new assignment
-      user.accountAssignments = [
-        ...assignments,
-        {
-          accountId: pending.accountId!,
-          accountName: account.name,
-          role: pending.role!
-        }
-      ];
-  
-      updatedUsers[userIndex] = user;
-      return updatedUsers;
-    });
-  
-    // Clear the pending assignment
-    setPendingAssignments(prev => ({
-      ...prev,
-      [userIndex]: {
-        accountId: null,
-        role: null
-      }
-    }));
-  };
-  
   const handleAddNewUser = () => {
     if (!newUser.email || !newUser.first_name || !newUser.last_name) {
       alert('Please fill in all required fields');
@@ -209,39 +167,88 @@ const handleAddAssignment = (userIndex: number) => {
     });
   };
 
-  const handleUserAccountAssignment = (userIndex: number, accountId: string, role: string) => {
+  const handleExistingUserSelect = (user: AccountUserWithAccountName) => {
+    const isSelected = selectedUsers.some(u => 
+      'email' in u.user && u.user.email.toLowerCase() === user.email.toLowerCase()
+    );
+    
+    if (isSelected) {
+      setSelectedUsers(selectedUsers.filter(u => 
+        'email' in u.user && u.user.email.toLowerCase() !== user.email.toLowerCase()
+      ));
+    } else {
+      setSelectedUsers([...selectedUsers, { 
+        user,
+        accountAssignments: action === 'add' ? [] : undefined
+      }]);
+    }
+  };
+
+  const handlePendingAccountChange = (userIndex: number, accountId: string) => {
+    setPendingAssignments(current => ({
+      ...current,
+      [userIndex]: {
+        ...current[userIndex],
+        accountId
+      }
+    }));
+  };
+
+  const handlePendingRoleChange = (userIndex: number, role: string) => {
+    setPendingAssignments(current => ({
+      ...current,
+      [userIndex]: {
+        ...current[userIndex],
+        role
+      }
+    }));
+  };
+
+  const handleAddAssignment = (userIndex: number) => {
+    const pending = pendingAssignments[userIndex];
+    if (!pending?.accountId || !pending?.role) return;
+
+    const account = accounts.find(a => a.id === pending.accountId);
+    if (!account) return;
+
     setSelectedUsers(users => {
       const updatedUsers = [...users];
-      const user = updatedUsers[userIndex];
+      const user = { ...updatedUsers[userIndex] };
       
       if (!user.accountAssignments) {
         user.accountAssignments = [];
       }
-  
-      const existingAssignmentIndex = user.accountAssignments.findIndex(
-        a => a.accountId === accountId
+
+      // Check if assignment already exists
+      const existingIndex = user.accountAssignments.findIndex(
+        a => a.accountId === pending.accountId
       );
-  
-      const account = accounts.find(a => a.id === accountId);
-      if (!account) return users;
-  
-      if (existingAssignmentIndex >= 0) {
-        // Update existing assignment
-        user.accountAssignments[existingAssignmentIndex] = {
-          ...user.accountAssignments[existingAssignmentIndex],
-          role
-        };
-      } else {
-        // Add new assignment
-        user.accountAssignments.push({
-          accountId,
-          accountName: account.name,
-          role
-        });
+
+      if (existingIndex >= 0) {
+        return users; // Return original array if assignment exists
       }
-  
+
+      user.accountAssignments = [
+        ...user.accountAssignments,
+        {
+          accountId: pending.accountId!,
+          accountName: account.name,
+          role: pending.role!
+        }
+      ];
+
+      updatedUsers[userIndex] = user;
       return updatedUsers;
     });
+
+    // Clear the pending assignment
+    setPendingAssignments(current => ({
+      ...current,
+      [userIndex]: {
+        accountId: null,
+        role: null
+      }
+    }));
   };
 
   const removeAccountAssignment = (userIndex: number, accountId: string) => {
@@ -259,23 +266,6 @@ const handleAddAssignment = (userIndex: number) => {
     });
   };
 
-  const handleExistingUserSelect = (user: AccountUser) => {
-    const isSelected = selectedUsers.some(u => 
-      'email' in u.user && u.user.email.toLowerCase() === user.email.toLowerCase()
-    );
-    
-    if (isSelected) {
-      setSelectedUsers(selectedUsers.filter(u => 
-        'email' in u.user && u.user.email.toLowerCase() !== user.email.toLowerCase()
-      ));
-    } else {
-      setSelectedUsers([...selectedUsers, { 
-        user,
-        accountAssignments: action === 'add' ? [] : undefined
-      }]);
-    }
-  };
-
   const executeActions = async () => {
     setProcessing(true);
     setProgress(0);
@@ -287,20 +277,17 @@ const handleAddAssignment = (userIndex: number) => {
       total = selectedUsers.reduce((sum, user) => 
         sum + (user.accountAssignments?.length || 0), 0);
     } else {
-      // For remove, we need to process each user's existing account assignments
       total = selectedUsers.length;
     }
 
     try {
       if (action === 'add') {
-        // Handle adding users
         for (const userAction of selectedUsers) {
           if (!userAction.accountAssignments?.length) continue;
 
           for (const assignment of userAction.accountAssignments) {
             try {
               if (userAction.isNew) {
-                // Create new user
                 await request(`/accounts/${assignment.accountId}/account_users`, {
                   method: 'POST',
                   body: JSON.stringify({
@@ -312,7 +299,6 @@ const handleAddAssignment = (userIndex: number) => {
                   })
                 });
               } else {
-                // Add existing user
                 const existingUser = userAction.user as AccountUser;
                 await request(`/accounts/${assignment.accountId}/account_users`, {
                   method: 'POST',
@@ -361,7 +347,7 @@ const handleAddAssignment = (userIndex: number) => {
 
             results.push({
               accountId: existingUser.account_id,
-              accountName: existingUser.accountName || '',
+              accountName: (userAction.user as AccountUserWithAccountName).accountName || '',
               userId: existingUser.user_id,
               userName: `${existingUser.first_name} ${existingUser.last_name}`,
               success: true
@@ -369,7 +355,7 @@ const handleAddAssignment = (userIndex: number) => {
           } catch (error) {
             results.push({
               accountId: (userAction.user as AccountUser).account_id,
-              accountName: (userAction.user as AccountUser).accountName || '',
+              accountName: (userAction.user as AccountUserWithAccountName).accountName || '',
               userId: (userAction.user as AccountUser).user_id,
               userName: `${userAction.user.first_name} ${userAction.user.last_name}`,
               success: false,
@@ -382,13 +368,15 @@ const handleAddAssignment = (userIndex: number) => {
         }
       }
     } catch (error) {
-      Logger.error('Error during bulk operation', error);
+      Logger.error('Error during bulk operation', isError(error) ? error : new Error(String(error)));
     }
 
     setResults(results);
     setProcessing(false);
-    setStep(action === 'add' ? 4 : 3); // Move to results step
+    setStep(action === 'add' ? 4 : 3);
   };
+
+  // Continue from previous code...
 
   const renderSelectedUsersList = () => (
     <div className="mt-4 border rounded-md p-4">
@@ -427,153 +415,6 @@ const handleAddAssignment = (userIndex: number) => {
     </div>
   );
 
-// Inside the BulkUserManager component, update the renderAccountAssignments function:
-
-const renderAccountAssignments = () => (
-    <div className="space-y-4">
-      <h3 className="text-lg font-medium">Step 2: Assign Accounts and Roles</h3>
-      {selectedUsers.map((userAction, userIndex) => {
-        const pending = pendingAssignments[userIndex] || { accountId: null, role: null };
-        
-        return (
-          <div key={userIndex} className="border rounded-md p-4 space-y-4">
-            <div className="flex justify-between items-start">
-              <div>
-                <h4 className="font-medium">
-                  {userAction.user.first_name} {userAction.user.last_name}
-                </h4>
-                <div className="text-sm text-gray-500">{userAction.user.email}</div>
-              </div>
-              {userAction.isNew && (
-                <span className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded">New User</span>
-              )}
-            </div>
-            
-            {/* Current Assignments Table */}
-            {userAction.accountAssignments && userAction.accountAssignments.length > 0 && (
-              <div>
-                <h5 className="text-sm font-medium mb-2">Current Assignments</h5>
-                <div className="border rounded-md overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-4 py-2 text-left">Account</th>
-                        <th className="px-4 py-2 text-left">Role</th>
-                        <th className="px-4 py-2 w-16"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {userAction.accountAssignments.map((assignment, i) => (
-                        <tr key={i} className="border-t">
-                          <td className="px-4 py-2">{assignment.accountName}</td>
-                          <td className="px-4 py-2">{assignment.role}</td>
-                          <td className="px-4 py-2">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => removeAccountAssignment(userIndex, assignment.accountId)}
-                              className="text-red-500 h-8 w-8 p-0"
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* Add New Assignment */}
-            <div className="space-y-3">
-              <h5 className="text-sm font-medium">Add Assignment</h5>
-              <div className="grid grid-cols-2 gap-4">
-                {/* Account Selection */}
-                <div>
-                  <label className="text-sm text-gray-700 mb-1 block">
-                    Select Account
-                  </label>
-                  <Select
-                    value={pending.accountId || ''}
-                    onValueChange={(accountId) => handlePendingAccountChange(userIndex, accountId)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Choose account..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {accounts
-                        .filter(account => !userAction.accountAssignments?.some(
-                          a => a.accountId === account.id
-                        ))
-                        .map(account => (
-                          <SelectItem key={account.id} value={account.id}>
-                            {account.name}
-                          </SelectItem>
-                        ))
-                      }
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Role Selection */}
-                <div>
-                  <label className="text-sm text-gray-700 mb-1 block">
-                    Select Role
-                  </label>
-                  <Select
-                    value={pending.role || ''}
-                    onValueChange={(role) => handlePendingRoleChange(userIndex, role)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Choose role..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="owner">Owner</SelectItem>
-                      <SelectItem value="full">Full</SelectItem>
-                      <SelectItem value="full,billing">Full + Billing</SelectItem>
-                      <SelectItem value="partial">Partial</SelectItem>
-                      <SelectItem value="partial,billing">Partial + Billing</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <Button
-                onClick={() => handleAddAssignment(userIndex)}
-                disabled={!pending.accountId || !pending.role}
-                className="mt-2"
-              >
-                Add Assignment
-              </Button>
-            </div>
-
-            {/* Validation Message */}
-            {(!userAction.accountAssignments || userAction.accountAssignments.length === 0) && (
-              <Alert variant="warning">
-                <AlertDescription>
-                  Please assign at least one account and role for this user.
-                </AlertDescription>
-              </Alert>
-            )}
-          </div>
-        );
-      })}
-
-      <div className="space-x-2">
-        <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
-        <Button 
-          onClick={() => setStep(3)}
-          disabled={selectedUsers.some(u => 
-            !u.accountAssignments || u.accountAssignments.length === 0
-          )}
-        >
-          Review
-        </Button>
-      </div>
-    </div>
-  );
-
   const renderStep = () => {
     switch (step) {
       case 1:
@@ -585,7 +426,7 @@ const renderAccountAssignments = () => (
               setSelectedUsers([]);
             }}>
               <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="add">Add Users</TabsTrigger>
+                <TabsTrigger value="add">Add Users</TabsTrigger>
                 <TabsTrigger value="remove">Remove Users</TabsTrigger>
               </TabsList>
               <TabsContent value="add">
@@ -708,7 +549,150 @@ const renderAccountAssignments = () => (
         );
 
       case 2:
-        return renderAccountAssignments();
+        return (
+          <div className="space-y-4">
+            <h3 className="text-lg font-medium">Step 2: Assign Accounts and Roles</h3>
+            {selectedUsers.map((userAction, userIndex) => {
+              const pending = pendingAssignments[userIndex] || { accountId: null, role: null };
+              
+              return (
+                <div key={userIndex} className="border rounded-md p-4 space-y-4">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h4 className="font-medium">
+                        {userAction.user.first_name} {userAction.user.last_name}
+                      </h4>
+                      <div className="text-sm text-gray-500">{userAction.user.email}</div>
+                    </div>
+                    {userAction.isNew && (
+                      <span className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded">New User</span>
+                    )}
+                  </div>
+                  
+                  {/* Current Assignments Table */}
+                  {userAction.accountAssignments && userAction.accountAssignments.length > 0 && (
+                    <div>
+                      <h5 className="text-sm font-medium mb-2">Current Assignments</h5>
+                      <div className="border rounded-md overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <th className="px-4 py-2 text-left">Account</th>
+                              <th className="px-4 py-2 text-left">Role</th>
+                              <th className="px-4 py-2 w-16"></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {userAction.accountAssignments.map((assignment, i) => (
+                              <tr key={i} className="border-t">
+                                <td className="px-4 py-2">{assignment.accountName}</td>
+                                <td className="px-4 py-2">{assignment.role}</td>
+                                <td className="px-4 py-2">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => removeAccountAssignment(userIndex, assignment.accountId)}
+                                    className="text-red-500 h-8 w-8 p-0"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </Button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Add New Assignment */}
+                  <div className="space-y-3">
+                    <h5 className="text-sm font-medium">Add Assignment</h5>
+                    <div className="grid grid-cols-2 gap-4">
+                      {/* Account Selection */}
+                      <div>
+                        <label className="text-sm text-gray-700 mb-1 block">
+                          Select Account
+                        </label>
+                        <Select
+                          value={pending.accountId || ''}
+                          onValueChange={(accountId) => handlePendingAccountChange(userIndex, accountId)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Choose account..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {accounts
+                              .filter(account => !userAction.accountAssignments?.some(
+                                a => a.accountId === account.id
+                              ))
+                              .map(account => (
+                                <SelectItem key={account.id} value={account.id}>
+                                  {account.name}
+                                </SelectItem>
+                              ))
+                            }
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {/* Role Selection */}
+                      <div>
+                        <label className="text-sm text-gray-700 mb-1 block">
+                          Select Role
+                        </label>
+                        <Select
+                          value={pending.role || ''}
+                          onValueChange={(role) => handlePendingRoleChange(userIndex, role)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Choose role..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="owner">Owner</SelectItem>
+                            <SelectItem value="full">Full</SelectItem>
+                            <SelectItem value="full,billing">Full + Billing</SelectItem>
+                            <SelectItem value="partial">Partial</SelectItem>
+                            <SelectItem value="partial,billing">Partial + Billing</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <Button
+                      onClick={() => handleAddAssignment(userIndex)}
+                      disabled={!pending.accountId || !pending.role}
+                      className="mt-2"
+                    >
+                      Add Assignment
+                    </Button>
+                  </div>
+
+                  {/* Validation Message */}
+                  {(!userAction.accountAssignments || userAction.accountAssignments.length === 0) && (
+    <Alert variant="warning">
+    <AlertDescription>
+      Please assign at least one account and role for this user.
+    </AlertDescription>
+  </Alert>
+                  )}
+                </div>
+              );
+            })}
+
+            <div className="space-x-2">
+              <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
+              <Button 
+                onClick={() => setStep(3)}
+                disabled={selectedUsers.some(u => 
+                  !u.accountAssignments || u.accountAssignments.length === 0
+                )}
+              >
+                Review
+              </Button>
+            </div>
+          </div>
+        );
 
       case 3:
         return (
@@ -744,8 +728,8 @@ const renderAccountAssignments = () => (
                       </div>
                       <div className="text-sm text-gray-500">
                         {userAction.user.email}
-                        {(userAction.user as AccountUser).accountName && 
-                          ` - ${(userAction.user as AccountUser).accountName}`}
+                        {(userAction.user as AccountUserWithAccountName).accountName && 
+                          ` - ${(userAction.user as AccountUserWithAccountName).accountName}`}
                       </div>
                     </div>
                   ))}
@@ -835,6 +819,8 @@ const renderAccountAssignments = () => (
                   setStep(1);
                   setSelectedUsers([]);
                   setResults([]);
+                  setSearchTerm('');
+                  setPendingAssignments({});
                 }}
               >
                 Start New Bulk Operation
@@ -843,6 +829,9 @@ const renderAccountAssignments = () => (
             </div>
           </div>
         );
+
+      default:
+        return null;
     }
   };
 
@@ -857,3 +846,5 @@ const renderAccountAssignments = () => (
     </Dialog>
   );
 }
+
+export default BulkUserManager;

@@ -1,5 +1,5 @@
 // src/components/views/AccountsView.tsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
@@ -18,6 +18,10 @@ interface EnrichedAccount extends Account {
   installCount: number;
 }
 
+function isError(error: unknown): error is Error {
+  return error instanceof Error;
+}
+
 export function AccountsView() {
   const { data, loading, error, request } = useApi<PaginatedResponse<Account>>();
   const [enrichedAccounts, setEnrichedAccounts] = useState<EnrichedAccount[]>([]);
@@ -27,11 +31,7 @@ export function AccountsView() {
   const [page, setPage] = useState(1);
   const ITEMS_PER_PAGE = 10;
 
-  useEffect(() => {
-    loadAccounts();
-  }, [page]);
-
-  const loadAccounts = async () => {
+  const loadAccounts = useCallback(async () => {
     try {
       const accountsResponse = await request(
         `/accounts?limit=${ITEMS_PER_PAGE}&offset=${(page - 1) * ITEMS_PER_PAGE}`
@@ -51,7 +51,7 @@ export function AccountsView() {
               installCount: installsResponse.results?.length || 0,
             };
           } catch (error) {
-            Logger.error(`Failed to fetch details for account ${account.id}`, error);
+            Logger.error(`Failed to fetch details for account ${account.id}`, isError(error) ? error : new Error(String(error)));
             return {
               ...account,
               userCount: 0,
@@ -64,9 +64,13 @@ export function AccountsView() {
 
       setEnrichedAccounts(enrichedAccountsData);
     } catch (error) {
-      Logger.error('Failed to load accounts', error);
+      Logger.error('Failed to load accounts', isError(error) ? error : new Error(String(error)));
     }
-  };
+  }, [page, request]);
+
+  useEffect(() => {
+    loadAccounts();
+  }, [loadAccounts]);
 
   const handleRemoveUsers = async () => {
     if (!window.confirm('Are you sure you want to remove users from the selected accounts?')) {
@@ -75,13 +79,13 @@ export function AccountsView() {
 
     try {
       for (const accountId of selectedAccounts) {
-        const response = await request(`/accounts/${accountId}/account_users`, { method: 'DELETE' });
+        await request(`/accounts/${accountId}/account_users`, { method: 'DELETE' });
         Logger.info(`Removed users from account ${accountId}`);
       }
       await loadAccounts();
       setSelectedAccounts([]);
     } catch (error) {
-      Logger.error('Failed to remove users', error);
+      Logger.error('Failed to remove users', isError(error) ? error : new Error(String(error)));
     }
   };
 
@@ -95,10 +99,7 @@ export function AccountsView() {
     <Card>
       <CardContent className="p-6">
         <div className="mb-4 flex gap-2">
-          <Button
-            onClick={() => setShowBulkManager(true)}
-            
-          >
+          <Button onClick={() => setShowBulkManager(true)}>
             Bulk User Manager
           </Button>
           <Button
@@ -177,7 +178,6 @@ export function AccountsView() {
         <BulkUserManager
           open={showBulkManager}
           onClose={() => setShowBulkManager(false)}
-          selectedAccounts={enrichedAccounts.filter(acc => selectedAccounts.includes(acc.id))}
         />
       </CardContent>
     </Card>

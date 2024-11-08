@@ -8,6 +8,10 @@ import { useApi } from '@/lib/hooks/useApi';
 import { Logger } from '@/lib/logger';
 import type { Account, AccountUser, PaginatedResponse } from '@/types/api';
 
+function isError(error: unknown): error is Error {
+    return error instanceof Error;
+  }
+
 export function UsersView() {
   const { data: accountsData, loading: accountsLoading, error: accountsError, request: accountsRequest } = useApi<PaginatedResponse<Account>>();
   const { request: usersRequest } = useApi<{results: AccountUser[]}>();
@@ -44,7 +48,7 @@ export function UsersView() {
       
       setAllUsers(flattenedUsers);
     } catch (error) {
-      Logger.error('Failed to load users', error);
+      Logger.error('Failed to load users',  isError(error) ? error : new Error(String(error)));
     } finally {
       setLoading(false);
     }
@@ -79,7 +83,7 @@ export function UsersView() {
                 <TableCell>{user.first_name}</TableCell>
                 <TableCell>{user.last_name}</TableCell>
                 <TableCell>{user.email}</TableCell>
-                <TableCell>{user.accountName}</TableCell>
+                <TableCell></TableCell>
                 <TableCell>{user.roles}</TableCell>
                 <TableCell>
                   {user.invite_accepted ? 
