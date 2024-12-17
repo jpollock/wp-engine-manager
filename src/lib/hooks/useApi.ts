@@ -1,7 +1,6 @@
-// src/lib/hooks/useApi.ts
 import { useState, useCallback } from 'react';
-import { api } from '@/lib/api';
-import { Logger } from '@/lib/logger';
+import { api } from '../api';
+import { Logger } from '../logger';
 
 interface ApiResponse<T> {
   data: T | null;
@@ -9,12 +8,11 @@ interface ApiResponse<T> {
   error: Error | null;
   request: (endpoint: string, options?: RequestInit) => Promise<T>;
 }
+
 function isError(error: unknown): error is Error {
-    return error instanceof Error;
-  }
+  return error instanceof Error;
+}
 
-
-  
 export function useApi<T>(): ApiResponse<T> {
   const [state, setState] = useState<{
     data: T | null;

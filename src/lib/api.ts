@@ -1,9 +1,14 @@
 import { Logger } from './logger';
-
-function isError(error: unknown): error is Error {
-    return error instanceof Error;
-  }
-
+import type { 
+  Account, 
+  Installation, 
+  Site, 
+  AccountUser,
+  ListAccounts200Response,
+  ListSites200Response,
+  ListInstalls200Response,
+  ListAccountUsers200Response
+} from '@elasticapi/wpengine-typescript-sdk';
 
 export class APIError extends Error {
   constructor(public status: number, message: string) {
@@ -12,34 +17,37 @@ export class APIError extends Error {
   }
 }
 
-export const api = {
-  baseUrl: 'https://api.wpengineapi.com/v1',
-  credentials: {
-    username: '',
-    password: ''
-  },
+class API {
+  private baseUrl = 'https://api.wpengineapi.com/v1';
+  private credentials: { username: string; password: string } | null = null;
 
   setCredentials(username: string, password: string) {
     this.credentials = { username, password };
-  },
+    Logger.info('API credentials set');
+  }
 
-  getHeaders() {
+  private getHeaders() {
+    if (!this.credentials) {
+      throw new APIError(401, 'API credentials not set');
+    }
+
+    const { username, password } = this.credentials;
     return {
-      'Authorization': `Basic ${btoa(`${this.credentials.username}:${this.credentials.password}`)}`,
+      'Authorization': `Basic ${btoa(`${username}:${password}`)}`,
       'Content-Type': 'application/json',
     };
-  },
+  }
 
   async fetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const url = `${this.baseUrl}${endpoint}`;
-    const headers = this.getHeaders();
+    const method = options.method?.toLowerCase() || 'get';
 
     try {
-      Logger.info(`API Request: ${options.method || 'GET'} ${endpoint}`);
-      const response = await fetch(url, {
+      Logger.info(`API Request: ${method.toUpperCase()} ${endpoint}`);
+
+      const response = await fetch(`${this.baseUrl}${endpoint}`, {
         ...options,
         headers: {
-          ...headers,
+          ...this.getHeaders(),
           ...options.headers,
         },
       });
@@ -49,12 +57,47 @@ export const api = {
         throw new APIError(response.status, error.message || 'API request failed');
       }
 
-      const data = await response.json();
-      Logger.info(`API Response: ${options.method || 'GET'} ${endpoint} - Success`);
-      return data as T;
+      const responseData = await response.json();
+
+      // Handle list endpoints that return paginated results
+      if (responseData.results) {
+        return responseData as T;
+      }
+
+      // Handle single resource endpoints
+      const [resource] = endpoint.split('/').filter(Boolean);
+      switch (resource) {
+        case 'accounts':
+          return { results: [responseData] } as T;
+        case 'sites':
+          return { results: [responseData] } as T;
+        case 'installs':
+          return { results: [responseData] } as T;
+        case 'account_users':
+          return { results: [responseData] } as T;
+        default:
+          return responseData as T;
+      }
     } catch (error) {
-      Logger.error(`API Error: ${options.method || 'GET'} ${endpoint}`, isError(error) ? error : new Error(String(error)));
-      throw error;
+      Logger.error(
+        `API Error: ${method.toUpperCase()} ${endpoint}`,
+        error instanceof Error ? error : new Error(String(error))
+      );
+      
+      if (error instanceof APIError) {
+        throw error;
+      }
+      
+      if (error instanceof Error) {
+        throw new APIError(
+          500,
+          error.message || 'An error occurred while making the request'
+        );
+      }
+      
+      throw new APIError(500, 'Unknown error occurred');
     }
   }
-};
+}
+
+export const api = new API();
